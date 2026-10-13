@@ -1,5 +1,6 @@
 use ruff_db::files::{File, FilePath, system_path_to_file};
 use ruff_db::system::SystemPath;
+use ruff_python_stdlib::sys::is_known_standard_library;
 use ty_module_resolver::{
     ImportingFile, ModuleName, ResolverEnvironment, resolve_module, resolve_module_confident,
     resolve_real_module, resolve_real_module_confident,
@@ -107,9 +108,24 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Returns `true` if `module_name` may fall back to desperate resolution.
+    ///
+    /// [`ModuleDb`] doesn't vendor typeshed, so standard library modules never resolve. ty finds
+    /// them in typeshed before it tries desperate resolution, but here they would fall through to
+    /// it, and `from typing import Any` could resolve to an unrelated `typing.py` next to the
+    /// importing file.
+    fn allows_desperate_resolution(&self, module_name: &ModuleName) -> bool {
+        !is_known_standard_library(
+            self.environment.python_version(self.db).minor,
+            module_name.first_component(),
+        )
+    }
+
     /// Resolves a module name to a module.
     fn resolve_module(&self, module_name: &ModuleName) -> Option<&'a FilePath> {
-        let module = if let Some(file) = self.file {
+        let module = if let Some(file) = self.file
+            && self.allows_desperate_resolution(module_name)
+        {
             resolve_module(
                 self.db,
                 ImportingFile::File(file, self.environment),
@@ -123,7 +139,9 @@ impl<'a> Resolver<'a> {
 
     /// Resolves a module name to a module (stubs not allowed).
     fn resolve_real_module(&self, module_name: &ModuleName) -> Option<&'a FilePath> {
-        let module = if let Some(file) = self.file {
+        let module = if let Some(file) = self.file
+            && self.allows_desperate_resolution(module_name)
+        {
             resolve_real_module(
                 self.db,
                 ImportingFile::File(file, self.environment),

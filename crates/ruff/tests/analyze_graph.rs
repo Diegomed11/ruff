@@ -1134,6 +1134,49 @@ fn src_glob_expansion() -> Result<()> {
     Ok(())
 }
 
+/// Test that standard library imports don't resolve to a same-named module next to the importing
+/// file, while other modules next to it still do ([#28274]).
+///
+/// [#28274]: https://github.com/astral-sh/ruff/issues/28274
+#[test]
+fn stdlib_shadowing_sibling() -> Result<()> {
+    let tempdir = TempDir::new()?;
+    let root = ChildPath::new(tempdir.path());
+
+    root.child("ruff.toml").write_str(indoc::indoc! {r#"
+        src = ["src"]
+        namespace-packages = ["src/example"]
+    "#})?;
+
+    let example = root.child("src").child("example");
+    example
+        .child("main.py")
+        .write_str("import helper\nfrom typing import Any")?;
+    example.child("helper.py").write_str("")?;
+    example.child("typing.py").write_str("")?;
+
+    insta::with_settings!({
+        filters => INSTA_FILTERS.to_vec(),
+    }, {
+        assert_cmd_snapshot!(command().current_dir(&root), @r#"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+        {
+          "src/example/helper.py": [],
+          "src/example/main.py": [
+            "src/example/helper.py"
+          ],
+          "src/example/typing.py": []
+        }
+
+        ----- stderr -----
+        "#);
+    });
+
+    Ok(())
+}
+
 #[test]
 fn notebook_with_magic() -> Result<()> {
     let tempdir = TempDir::new()?;
